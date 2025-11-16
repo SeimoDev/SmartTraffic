@@ -1,4 +1,4 @@
-# Yolo 车辆计数（中文说明）
+# Yolo 车辆计数
 
 ## 概览
 - 本项目使用 YOLOv3 进行实时交通视频中的车辆检测与计数，支持的类别包括：`bicycle`、`car`、`motorbike`、`bus`、`truck`、`train`。
