@@ -10,7 +10,7 @@ from concurrent.futures import ThreadPoolExecutor
 #All these classes will be counted as 'vehicles'
 list_of_vehicles = ["bicycle","car","motorbike","bus","truck", "train"]
 # Setting the threshold for the number of frames to search a vehicle for
-FRAMES_BEFORE_CURRENT = 10  
+FRAMES_BEFORE_CURRENT = 10
 
 #Parse command line arguments and extract the values required
 LABELS, weightsPath, configPath, inputVideoPath, outputVideoPath,\
@@ -53,6 +53,18 @@ def displayVehicleCount(frame, vehicle_count):
 		0.8, #Size
 		(0, 0xFF, 0), #Color
 		2, #Thickness
+		cv2.FONT_HERSHEY_COMPLEX_SMALL,
+		)
+
+def displayPersonCount(frame, person_count):
+	cv2.putText(
+		frame,
+		'Detected Persons: ' + str(person_count),
+		(20, 50),
+		cv2.FONT_HERSHEY_SIMPLEX,
+		0.8,
+		(0xFF, 0, 0),
+		2,
 		cv2.FONT_HERSHEY_COMPLEX_SMALL,
 		)
 
@@ -110,6 +122,8 @@ def drawDetectionBoxes(idxs, boxes, classIDs, confidences, frame):
 def initializeVideoWriter(video_width, video_height, videoStream):
 	# Getting the fps of the source video
 	sourceVideofps = videoStream.get(cv2.CAP_PROP_FPS)
+	if not sourceVideofps or sourceVideofps <= 0 or sourceVideofps > 120:
+		sourceVideofps = 30
 	# initialize our video writer
 	os.makedirs(os.path.dirname(outputVideoPath) or ".", exist_ok=True)
 	ext = os.path.splitext(outputVideoPath)[1].lower()
@@ -185,6 +199,26 @@ def count_vehicles(idxs, boxes, classIDs, vehicle_count, previous_frame_detectio
 
 	return vehicle_count, current_detections
 
+def count_persons(idxs, boxes, classIDs, person_count, previous_frame_person_detections, frame):
+	current_detections = {}
+	if len(idxs) > 0:
+		for i in idxs.flatten():
+			(x, y) = (boxes[i][0], boxes[i][1])
+			(w, h) = (boxes[i][2], boxes[i][3])
+			centerX = x + (w//2)
+			centerY = y + (h//2)
+			if (LABELS[classIDs[i]] == 'person'):
+				current_detections[(centerX, centerY)] = person_count
+				if (not boxInPreviousFrames(previous_frame_person_detections, (centerX, centerY, w, h), current_detections)):
+					person_count += 1
+				ID = current_detections.get((centerX, centerY))
+				if (list(current_detections.values()).count(ID) > 1):
+					current_detections[(centerX, centerY)] = person_count
+					person_count += 1
+				cv2.putText(frame, str(ID), (centerX, centerY),
+					cv2.FONT_HERSHEY_SIMPLEX, 0.5, [255,0,0], 2)
+	return person_count, current_detections
+
 # load our YOLO object detector trained on COCO dataset (80 classes)
 # and determine only the *output* layer names that we need from YOLO
 print("[INFO] loading YOLO from disk...")
@@ -234,6 +268,10 @@ except Exception:
 videoStream = cv2.VideoCapture(inputVideoPath)
 video_width = int(videoStream.get(cv2.CAP_PROP_FRAME_WIDTH))
 video_height = int(videoStream.get(cv2.CAP_PROP_FRAME_HEIGHT))
+source_fps = videoStream.get(cv2.CAP_PROP_FPS)
+if not source_fps or source_fps <= 0 or source_fps > 120:
+    source_fps = 30
+display_delay = max(1, int(1000 / source_fps))
 
 # Specifying coordinates for a default line 
 x1_line = 0
@@ -250,6 +288,8 @@ start_time = int(time.time())
 prev_boxes, prev_confidences, prev_classIDs, prev_idxs = [], [], [], []
 executor = ThreadPoolExecutor(max_workers=1)
 detection_future = None
+previous_frame_person_detections = [{(0,0):0} for i in range(FRAMES_BEFORE_CURRENT)]
+person_count = 0
 # loop over frames from the video file stream
 while True:
 	print("================NEW FRAME================")
@@ -312,22 +352,26 @@ while True:
 	drawDetectionBoxes(idxs, boxes, classIDs, confidences, frame)
 
 	vehicle_count, current_detections = count_vehicles(idxs, boxes, classIDs, vehicle_count, previous_frame_detections, frame)
+	person_count, current_person_detections = count_persons(idxs, boxes, classIDs, person_count, previous_frame_person_detections, frame)
 
 	# Display Vehicle Count if a vehicle has passed the line 
 	displayVehicleCount(frame, vehicle_count)
+	displayPersonCount(frame, person_count)
 
 	# write the output frame to disk
 	writer.write(frame)
 
 	if USE_DISPLAY:
 		cv2.imshow('Frame', frame)
-		if cv2.waitKey(1) & 0xFF == ord('q'):
+		if cv2.waitKey(display_delay) & 0xFF == ord('q'):
 			break	
 	
 	# Updating with the current frame detections
 	previous_frame_detections.pop(0) #Removing the first frame from the list
 	# previous_frame_detections.append(spatial.KDTree(current_detections))
 	previous_frame_detections.append(current_detections)
+	previous_frame_person_detections.pop(0)
+	previous_frame_person_detections.append(current_person_detections)
 
 # release the file pointers
 print("[INFO] cleaning up...")
